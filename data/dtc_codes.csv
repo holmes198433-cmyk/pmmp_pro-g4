@@ -1,0 +1,73 @@
+code,description,severity,system
+P0100,Mass or Volume Air Flow Circuit Malfunction,WARNING,Powertrain
+P0101,Mass or Volume Air Flow Circuit Range/Performance Problem,WARNING,Powertrain
+P0102,Mass or Volume Air Flow Circuit Low Input,WARNING,Powertrain
+P0103,Mass or Volume Air Flow Circuit High Input,WARNING,Powertrain
+P0110,Intake Air Temperature Circuit Malfunction,INFORMATIONAL,Powertrain
+P0115,Engine Coolant Temperature Circuit Malfunction,WARNING,Powertrain
+P0117,Engine Coolant Temperature Circuit Low Input,WARNING,Powertrain
+P0118,Engine Coolant Temperature Circuit High Input,CRITICAL,Powertrain
+P0120,Throttle/Pedal Position Sensor/Switch A Circuit Malfunction,WARNING,Powertrain
+P0128,Coolant Thermostat (Coolant Temperature Below Thermostat Regulating Temperature),INFORMATIONAL,Powertrain
+P0130,O2 Sensor Circuit Malfunction (Bank 1 Sensor 1),WARNING,Powertrain
+P0133,O2 Sensor Circuit Slow Response (Bank 1 Sensor 1),INFORMATIONAL,Powertrain
+P0135,O2 Sensor Heater Circuit Malfunction (Bank 1 Sensor 1),INFORMATIONAL,Powertrain
+P0171,System Too Lean (Bank 1),WARNING,Powertrain
+P0172,System Too Rich (Bank 1),WARNING,Powertrain
+P0174,System Too Lean (Bank 2),WARNING,Powertrain
+P0175,System Too Rich (Bank 2),WARNING,Powertrain
+P0200,Injector Circuit Malfunction,WARNING,Powertrain
+P0201,Injector Circuit Malfunction - Cylinder 1,WARNING,Powertrain
+P0202,Injector Circuit Malfunction - Cylinder 2,WARNING,Powertrain
+P0203,Injector Circuit Malfunction - Cylinder 3,WARNING,Powertrain
+P0204,Injector Circuit Malfunction - Cylinder 4,WARNING,Powertrain
+P0217,Engine Overtemperature Condition,CRITICAL,Powertrain
+P0219,Engine Overspeed Condition,CRITICAL,Powertrain
+P0300,Random/Multiple Cylinder Misfire Detected,CRITICAL,Powertrain
+P0301,Cylinder 1 Misfire Detected,CRITICAL,Powertrain
+P0302,Cylinder 2 Misfire Detected,CRITICAL,Powertrain
+P0303,Cylinder 3 Misfire Detected,CRITICAL,Powertrain
+P0304,Cylinder 4 Misfire Detected,CRITICAL,Powertrain
+P0325,Knock Sensor 1 Circuit Malfunction (Bank 1),WARNING,Powertrain
+P0335,Crankshaft Position Sensor A Circuit Malfunction,CRITICAL,Powertrain
+P0340,Camshaft Position Sensor Circuit Malfunction,WARNING,Powertrain
+P0401,Exhaust Gas Recirculation Flow Insufficient Detected,INFORMATIONAL,Powertrain
+P0420,Catalyst System Efficiency Below Threshold (Bank 1),INFORMATIONAL,Powertrain
+P0430,Catalyst System Efficiency Below Threshold (Bank 2),INFORMATIONAL,Powertrain
+P0440,Evaporative Emission Control System Malfunction,INFORMATIONAL,Powertrain
+P0442,Evaporative Emission Control System Leak Detected (Small Leak),INFORMATIONAL,Powertrain
+P0455,Evaporative Emission Control System Leak Detected (Gross Leak/No Flow),WARNING,Powertrain
+P0500,Vehicle Speed Sensor Malfunction,WARNING,Powertrain
+P0505,Idle Air Control System Malfunction,WARNING,Powertrain
+P0520,Engine Oil Pressure Sensor/Switch Circuit Malfunction,CRITICAL,Powertrain
+P0522,Engine Oil Pressure Sensor/Switch Low Voltage,CRITICAL,Powertrain
+P0600,Serial Communication Link Malfunction,CRITICAL,Powertrain
+P0606,ECM/PCM Processor Fault,CRITICAL,Powertrain
+P0700,Transmission Control System Malfunction,CRITICAL,Powertrain
+P0705,Transmission Range Sensor Circuit Malfunction (PRNDL Input),WARNING,Powertrain
+P0720,Output Speed Sensor Circuit Malfunction,WARNING,Powertrain
+P0730,Incorrect Gear Ratio,CRITICAL,Powertrain
+P0740,Torque Converter Clutch Circuit Malfunction,WARNING,Powertrain
+P0800,Control System Malfunction (MIL Request),WARNING,Powertrain
+C0035,Left Front Wheel Speed Sensor Circuit Malfunction,CRITICAL,Chassis
+C0040,Right Front Wheel Speed Sensor Circuit Malfunction,CRITICAL,Chassis
+C0045,Left Rear Wheel Speed Sensor Circuit Malfunction,CRITICAL,Chassis
+C0050,Right Rear Wheel Speed Sensor Circuit Malfunction,CRITICAL,Chassis
+C0110,Pump Motor Circuit Malfunction,CRITICAL,Chassis
+C0121,Valve Relay Circuit Malfunction,CRITICAL,Chassis
+C0244,PWM Delivered Torque Delivered Error,WARNING,Chassis
+C0550,Electronic Control Unit (ECU) Malfunction,CRITICAL,Chassis
+B0001,Driver Frontal Stage 1 Deployment Control,CRITICAL,Body
+B0010,Passenger Frontal Stage 1 Deployment Control,CRITICAL,Body
+B0028,Right Side Airbag Deployment Control,CRITICAL,Body
+B1000,Electronic Control Unit Performance,CRITICAL,Body
+B1318,Battery Voltage Low,WARNING,Body
+B1325,Device Power #1 Circuit Voltage Below Threshold,WARNING,Body
+B1428,Seatbelt Warning Lamp Circuit Failure,INFORMATIONAL,Body
+U0001,High Speed CAN Communication Bus,CRITICAL,Network
+U0100,Lost Communication With ECM/PCM,CRITICAL,Network
+U0101,Lost Communication with TCM,CRITICAL,Network
+U0121,Lost Communication With Anti-Lock Brake System (ABS) Control Module,CRITICAL,Network
+U0140,Lost Communication With Body Control Module,WARNING,Network
+U0155,Lost Communication With Instrument Panel Cluster (IPC) Control Module,WARNING,Network
+U0401,Invalid Data Received From ECM/PCM,WARNING,Network
