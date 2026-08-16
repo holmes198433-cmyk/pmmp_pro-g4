@@ -1,0 +1,62 @@
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+.pyc
+*.egg-info
+dist/
+build/
+.venv
+venv/
+*.egg
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Development
+.pytest_cache
+.coverage
+htmlcov/
+.mypy_cache
+.isort.cfg
+.flake8
+.pre-commit-config.yaml
+
+# Documentation
+*.md
+docs/
+
+# Testing
+tests/
+pytest.ini
+
+# CI/CD
+.github
+.gitlab-ci.yml
+.circleci
+
+# Logs (don't include in image, mount as volume)
+logs/
+
+# Secrets (never include)
+.env
+.env.*
+*.pem
+*.key
+
+# Build artifacts
+*.tar.gz
+*.zip
+dist/

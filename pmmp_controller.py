@@ -1,15 +1,18 @@
 import sys
 import os
 import time
+import asyncio
 from typing import Optional, Dict, Any, List
 
 from PyQt6.QtWidgets import QApplication, QInputDialog, QMessageBox, QLineEdit
-from PyQt6.QtCore import QTimer
+from PyQt6.QtCore import QTimer, QThread, pyqtSignal, QObject
 
 from async_obd_manager import AsyncOBDManager
 from mock_obd_manager import MockOBDManager
 from thermo_diagnostics import ThermodynamicDiagnosticEngine
 from rag_knowledge_engine import LocalServiceManualRAG
+from dtc_loader import DTCLoader
+from nhtsa_client import AsyncNHTSAClient
 from decision_engine import BayesianDecisionEngine, DiagnosticHypothesis
 from gui_dashboard import PMMPProDash
 from data_logger import SessionDataLogger
@@ -18,6 +21,23 @@ from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+# Worker thread for non-blocking NHTSA API queries
+class NHTSAWorker(QThread):
+    results_ready = pyqtSignal(dict, dict)  # recalls, tsbs
+
+    def __init__(self, vin: str):
+        super().__init__()
+        self.vin = vin
+
+    def run(self):
+        async def fetch():
+            client = AsyncNHTSAClient()
+            recalls = await client.get_recalls(self.vin)
+            tsbs = await client.get_tsbs(self.vin)
+            return recalls, tsbs
+        
+        recalls, tsbs = asyncio.run(fetch())
+        self.results_ready.emit(recalls, tsbs)
 def authenticate_gatekeeper(shop_password: str = "pmmp", max_attempts: int = 3) -> bool:
     """
     Workshop Gatekeeper modal authentication dialog.

@@ -1,0 +1,8 @@
+PyQt6==6.7.0
+pyqtgraph==0.13.7
+obd>=0.7.2,<1.0
+faiss-cpu==1.8.0
+sentence-transformers==3.0.0
+beautifulsoup4==4.12.3
+tqdm==4.66.2
+python-dotenv==1.0.0

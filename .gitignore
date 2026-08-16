@@ -1,0 +1,20 @@
+.aider*
+.env
+# Virtual Environments
+venv/
+.venv/
+env/
+
+# Python Caches
+__pycache__/
+*.pyc
+*.pyo
+
+# Logs & Temporary Files
+*.log
+.pytest_cache/
+.vscode/
+build/
+dist/
+*.egg-info/
+*.index

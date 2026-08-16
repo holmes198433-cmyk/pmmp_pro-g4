@@ -1,0 +1,16 @@
+{
+    "GENERIC_V8_ENGINE": {
+        "maf_idle": {"min": 4.0, "max": 8.0, "unit": "g/s"},
+        "map_idle": {"min": 25.0, "max": 50.0, "unit": "kPa"},
+        "ect_operating": {"min": 85.0, "max": 108.0, "unit": "C"},
+        "timing_idle": {"min": 8.0, "max": 20.0, "unit": "Degrees"},
+        "engine_load_idle": {"min": 15.0, "max": 30.0, "unit": "%"}
+    },
+    "FORD_5.4": {
+        "maf_idle": {"min": 4.5, "max": 7.5, "unit": "g/s"},
+        "map_idle": {"min": 28.0, "max": 48.0, "unit": "kPa"},
+        "ect_operating": {"min": 88.0, "max": 105.0, "unit": "C"},
+        "timing_idle": {"min": 10.0, "max": 18.0, "unit": "Degrees"},
+        "engine_load_idle": {"min": 16.0, "max": 28.0, "unit": "%"}
+    }
+}

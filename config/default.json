@@ -1,0 +1,41 @@
+{
+  "app": {
+    "name": "PMMP Pro-G4",
+    "version": "1.0.0",
+    "mode": "production"
+  },
+  "obd": {
+    "port": "/dev/serial/by-id/usb-ScanTool.net_LLC_OBDLink_EX_223230398770-if00-port0",
+    "fast_init": true,
+    "baudrate": 115200,
+    "timeout": 10,
+    "fallback_mode": "mock"
+  },
+  "engine": {
+    "displacement_liters": 2.0,
+    "fuel_type": "gasoline"
+  },
+  "gui": {
+    "window_width": 1200,
+    "window_height": 800,
+    "theme": "dark",
+    "font_family": "Courier",
+    "refresh_rate_ms": 50
+  },
+  "rag": {
+    "manual_db_path": "./service_manuals",
+    "use_remote": false,
+    "remote_api_url": "https://api.example.com/diagnostics"
+  },
+  "logging": {
+    "level": "INFO",
+    "log_file": "./logs/pmmp.log",
+    "max_log_size_mb": 10,
+    "backup_count": 5
+  },
+  "diagnostics": {
+    "enable_physics_analysis": true,
+    "enable_rag_lookup": true,
+    "cache_results": true
+  }
+}

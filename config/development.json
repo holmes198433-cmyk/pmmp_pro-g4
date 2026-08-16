@@ -1,0 +1,41 @@
+{
+  "app": {
+    "name": "PMMP Pro-G4 (DEV)",
+    "version": "1.0.0-dev",
+    "mode": "development"
+  },
+  "obd": {
+    "port": "/dev/null",
+    "fast_init": false,
+    "baudrate": 115200,
+    "timeout": 5,
+    "fallback_mode": "mock"
+  },
+  "engine": {
+    "displacement_liters": 2.0,
+    "fuel_type": "gasoline"
+  },
+  "gui": {
+    "window_width": 1200,
+    "window_height": 800,
+    "theme": "dark",
+    "font_family": "Courier",
+    "refresh_rate_ms": 50
+  },
+  "rag": {
+    "manual_db_path": "./service_manuals",
+    "use_remote": false,
+    "remote_api_url": "http://localhost:8000/diagnostics"
+  },
+  "logging": {
+    "level": "DEBUG",
+    "log_file": "./logs/pmmp_dev.log",
+    "max_log_size_mb": 50,
+    "backup_count": 10
+  },
+  "diagnostics": {
+    "enable_physics_analysis": true,
+    "enable_rag_lookup": true,
+    "cache_results": false
+  }
+}

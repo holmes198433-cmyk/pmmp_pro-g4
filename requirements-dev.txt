@@ -1,0 +1,45 @@
+# Production dependencies (use flexible versions for security patches)
+PyQt6>=6.7,<7.0
+pyqtgraph>=0.13,<0.14
+obd>=0.7.2,<1.0
+faiss-cpu>=1.8,<2.0
+sentence-transformers>=3.0,<4.0
+beautifulsoup4>=4.12,<5.0
+tqdm>=4.66,<5.0
+python-dotenv>=1.0,<2.0
+
+# Development and testing dependencies
+pytest>=7.4,<8.0
+pytest-cov>=4.1,<5.0
+pytest-asyncio>=0.21,<0.22
+
+# Code quality and linting
+black>=23.0,<24.0
+flake8>=6.0,<7.0
+mypy>=1.0,<2.0
+isort>=5.12,<6.0
+
+# Dependency management
+pip-tools>=7.3,<8.0
+
+# Security scanning
+safety>=2.3,<3.0
+pip-audit>=2.6,<3.0
+
+# License tracking
+pip-licenses>=4.3,<5.0
+
+# API and REST (for future REST endpoint)
+fastapi>=0.104,<0.105
+uvicorn>=0.24,<0.25
+pydantic>=2.0,<3.0
+
+# Monitoring and profiling
+prometheus-client>=0.18,<0.19
+
+# Versioning automation (optional but recommended)
+bump2version>=1.0,<2.0
+
+# Build tools
+build>=1.0,<2.0
+wheel>=0.41,<0.42
