@@ -171,11 +171,29 @@ class PMMPController:
             # STEP 1: Telemetry snapshot acquisition
             telemetry = self._get_telemetry()
             
-            # STEP 2: Physics computation (VE and fuel trims)
+            # STEP 2: Physics computation (VE, O2 Kinetics, and Fuel Trim Matrix)
             if self.physics_engine:
                 ve = self.physics_engine.calculate_volumetric_efficiency(telemetry)
                 telemetry["VE"] = round(ve * 100.0, 1)
-                self.physics_engine.evaluate_fuel_trim_matrix(telemetry)
+                
+                # Kinetic Decay Tracking
+                o2_freq, kinetic_alert = self.physics_engine.track_o2_sensor_kinetics(telemetry)
+                telemetry["O2_FREQ_HZ"] = o2_freq
+
+                # VE Obstruction Evaluation
+                ve_alert = self.physics_engine.evaluate_ve_obstruction(telemetry, ve)
+                
+                # Fuel Trim Matrix Evaluation
+                trim_insights = self.physics_engine.evaluate_fuel_trim_matrix(telemetry)
+
+                # Broadcast active physics alerts to console (throttled)
+                if self.diagnostic_cycle_counter % 20 == 0:
+                    for insight in trim_insights:
+                        self.gui.console_output.append(f"🔍 [TRIM MATRIX] {insight}")
+                    if kinetic_alert:
+                        self.gui.console_output.append(f"⚠️  [O2 KINETICS] {kinetic_alert}")
+                    if ve_alert:
+                        self.gui.console_output.append(f"🚨 [VE RESTRICTION] {ve_alert}")
             
             # Non-blocking async queue logging
             self.data_logger.log_telemetry(telemetry)
@@ -427,7 +445,7 @@ Advanced Protocol & UDS:
                 self.gui.console_output.append(f"   STFT:    {telemetry.get('STFT', 0):.1f} %")
                 self.gui.console_output.append(f"   LTFT:    {telemetry.get('LTFT', 0):.1f} %")
                 self.gui.console_output.append(f"   COOLANT: {telemetry.get('COOLANT', 0):.0f} °C")
-                self.gui.console_output.append(f"   O2_V:    {telemetry.get('O2_V', 0):.2f} V")
+                self.gui.console_output.append(f"   O2_V:    {telemetry.get('O2_V', 0):.2f} V ({telemetry.get('O2_FREQ_HZ', 0.0):.2f} Hz)")
             else:
                 self.gui.console_output.append("   (No telemetry available)")
         except Exception as e:
