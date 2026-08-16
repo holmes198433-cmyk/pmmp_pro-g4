@@ -1,6 +1,7 @@
 import sys
 import os
 import time
+from typing import Optional, Dict, Any, List
 
 from PyQt6.QtWidgets import QApplication, QInputDialog, QMessageBox, QLineEdit
 from PyQt6.QtCore import QTimer
