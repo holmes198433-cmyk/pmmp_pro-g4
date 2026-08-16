@@ -29,12 +29,32 @@ class ThermodynamicDiagnosticEngine:
             "RPM_HIGH": {"LOAD_LOW": None, "LOAD_MID": None, "LOAD_HIGH": None}
         }
         
+        # Directed Acyclic Graph (DAG) representing Parent (Root Cause) -> Children (Symptoms)
         self.dependency_graph: Dict[str, Set[str]] = {
-            "P0101": {"P0171", "P0174", "P0300", "P0301", "P0302", "P0303", "P0304"},
-            "P0102": {"P0171", "P0174", "P0300"},
+            # MAF Faults cascade to fuel trims and multiple misfires
+            "P0100": {"P0171", "P0174", "P0300", "P0301", "P0302", "P0303", "P0304"},
+            "P0101": {"P0171", "P0174", "P0300", "P0301", "P0302", "P0303", "P0304", "P0305", "P0306", "P0308"},
+            "P0102": {"P0171", "P0174", "P0300", "P0301", "P0302", "P0303", "P0304"},
+            "P0103": {"P0171", "P0174", "P0300"},
+            # Upstream O2 sensor kinetics decay cascades to fuel trim and random misfires
+            "P0130": {"P0171", "P0174", "P0300"},
+            "P0131": {"P0171", "P0300"},
             "P0133": {"P0171", "P0300"},
-            "P0171": {"P0300", "P0301", "P0302", "P0303", "P0304"},
-            "P0507": {"P0171"}
+            "P0134": {"P0171", "P0300"},
+            # Fuel Pressure & Pump Restrictions
+            "P0087": {"P0171", "P0174", "P0300", "P0301", "P0302", "P0303", "P0304"},
+            "P0089": {"P0171", "P0174", "P0300"},
+            # Throttle & Vacuum / Idle Speed Control
+            "P0505": {"P0171", "P0174"},
+            "P0507": {"P0171", "P0174"},
+            # System Lean cascades to random and individual cylinder misfires
+            "P0171": {"P0300", "P0301", "P0302", "P0303", "P0304", "P0305", "P0306", "P0308"},
+            "P0174": {"P0300", "P0301", "P0302", "P0303", "P0304", "P0305", "P0306", "P0308"},
+            # Primary Random Misfire cascades to individual cylinders
+            "P0300": {"P0301", "P0302", "P0303", "P0304", "P0305", "P0306", "P0308"},
+            # Catalytic Degradation cascades to downstream O2 sensor flags
+            "P0420": {"P0136", "P0137", "P0138", "P0140"},
+            "P0430": {"P0156", "P0157", "P0158", "P0160"},
         }
 
     def calculate_volumetric_efficiency(self, telemetry: Dict[str, Any]) -> float:
@@ -193,17 +213,23 @@ class ThermodynamicDiagnosticEngine:
         return insights
 
     def isolate_root_dtcs(self, active_dtcs: List[str]) -> Dict[str, Any]:
+        """
+        Traverses the Parent-Child Directed Acyclic Graph (DAG) to isolate true
+        root-cause failure codes and suppress secondary downstream symptoms.
+        """
         active_set = set(active_dtcs)
         suppressed_codes = set()
 
+        # Iteratively traverse DAG relationships
         for parent, children in self.dependency_graph.items():
             if parent in active_set:
                 suppressed_codes.update(children.intersection(active_set))
 
-        unmasked_primaries = list(active_set - suppressed_codes)
+        # Root causes are active codes that are never a child of another present code
+        unmasked_primaries = [code for code in active_dtcs if code not in suppressed_codes]
 
         return {
             "root_causes": unmasked_primaries,
-            "suppressed_symptom_codes": list(suppressed_codes),
+            "suppressed_symptom_codes": sorted(list(suppressed_codes)),
             "raw_input_codes": active_dtcs
         }

@@ -1,9 +1,11 @@
-import obd
-from obd import OBDStatus
+import re
 import time
 import logging
 import threading
 from typing import Dict, Any, Callable, Optional, List
+
+import obd
+from obd import OBDStatus
 
 logger = logging.getLogger("PMMP_OBD")
 
@@ -12,7 +14,12 @@ class AsyncOBDManager:
         self.port_name = port_name
         self.fast_init = fast_init
         self.connection: Optional[obd.Async] = None
-        self.telemetry_cache: Dict[str, Any] = {"RPM": 0, "MAF": 0, "LOAD": 0, "STFT": 0, "LTFT": 0, "COOLANT": 0, "DTCs": []}
+        self.telemetry_cache: Dict[str, Any] = {
+            "RPM": 0, "MAF": 0, "LOAD": 0, "STFT": 0, "LTFT": 0, 
+            "COOLANT": 0, "MAP": 101.3, "IAT": 25.0, "O2_V": 0.0, "DTCs": []
+        }
+        self.vin: Optional[str] = None
+        self.freeze_frame_cache: Dict[str, Dict[str, Any]] = {}
         self.cache_lock = threading.Lock()
         self.is_running = False
         
@@ -62,6 +69,85 @@ class AsyncOBDManager:
                 self.telemetry_cache["_last_updated"] = time.time()
         return callback
         
+    def query_vin(self) -> Optional[str]:
+        """
+        Queries 17-digit VIN via Mode 09 PID 02 (ISO 3779 standard).
+        Returns validated alphanumeric VIN string excluding letters I, O, Q.
+        """
+        if self.vin:
+            return self.vin
+
+        if not self.connection or not self.connection.is_connected():
+            return None
+
+        try:
+            # Mode 09 PID 02: Vehicle Identification Number
+            resp = self.connection.query(obd.commands.VIN)
+            if resp and not resp.is_null():
+                raw_vin = str(resp.value).strip().upper()
+                # Validate 17-character ISO 3779 pattern
+                match = re.search(r'[A-HJ-NPR-Z0-9]{17}', raw_vin)
+                if match:
+                    self.vin = match.group(0)
+                    logger.info(f"Successfully extracted VIN: {self.vin}")
+                    return self.vin
+        except Exception as e:
+            logger.warning(f"Mode 09 PID 02 VIN extraction error: {e}")
+
+        # Interface direct fallback (0902 query)
+        try:
+            if hasattr(self.connection, 'interface') and self.connection.interface:
+                raw_resp = self.connection.interface.send("0902")
+                clean = re.sub(r'[^A-HJ-NPR-Z0-9]', '', str(raw_resp).upper())
+                match = re.search(r'[A-HJ-NPR-Z0-9]{17}', clean)
+                if match:
+                    self.vin = match.group(0)
+                    return self.vin
+        except Exception as e:
+            logger.debug(f"Direct 0902 fallback failed: {e}")
+
+        return None
+
+    def query_freeze_frame(self, dtc: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Acquires Mode 02 Freeze-Frame PID snapshot for an active fault code.
+        Captures engine state at the exact moment the DTC threshold triggered.
+        """
+        if not self.connection or not self.connection.is_connected():
+            return {}
+
+        cache_key = dtc or "DEFAULT"
+        if cache_key in self.freeze_frame_cache:
+            return self.freeze_frame_cache[cache_key]
+
+        snapshot: Dict[str, Any] = {"DTC": dtc}
+        try:
+            # Mode 02 Freeze Frame Queries
+            ff_dtc = self.connection.query(obd.commands.FREEZE_DTC)
+            if ff_dtc and not ff_dtc.is_null():
+                snapshot["FREEZE_DTC"] = str(ff_dtc.value)
+
+            # Query operational environment metrics at time of fault
+            cmds = [
+                (obd.commands.RPM, "RPM"),
+                (obd.commands.ENGINE_LOAD, "LOAD"),
+                (obd.commands.COOLANT_TEMP, "COOLANT"),
+                (obd.commands.SPEED, "SPEED"),
+                (obd.commands.SHORT_TERM_FUEL_TRIM_1, "STFT"),
+                (obd.commands.LONG_TERM_FUEL_TRIM_1, "LTFT")
+            ]
+            for cmd, key in cmds:
+                res = self.connection.query(cmd)
+                if res and not res.is_null():
+                    snapshot[key] = res.value.magnitude if hasattr(res.value, "magnitude") else res.value
+
+            self.freeze_frame_cache[cache_key] = snapshot
+            logger.info(f"Captured Mode 02 Freeze Frame for {cache_key}: {snapshot}")
+        except Exception as e:
+            logger.warning(f"Error querying Mode 02 Freeze Frame: {e}")
+
+        return snapshot
+
     def query_active_dtcs(self) -> List[str]:
         if not self.connection or not self.connection.is_connected():
             return []

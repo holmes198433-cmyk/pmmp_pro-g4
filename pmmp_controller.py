@@ -9,6 +9,7 @@ from async_obd_manager import AsyncOBDManager
 from mock_obd_manager import MockOBDManager
 from thermo_diagnostics import ThermodynamicDiagnosticEngine
 from rag_knowledge_engine import LocalServiceManualRAG
+from decision_engine import BayesianDecisionEngine, DiagnosticHypothesis
 from gui_dashboard import PMMPProDash
 from data_logger import SessionDataLogger
 from utils.config import init_config, get_config
@@ -76,8 +77,12 @@ class PMMPController:
         # Wire up console input handler
         self.gui.console_input.returnPressed.connect(self.handle_console_command)
         
-        # Initialize Async Session Logger
+        # Initialize Async Session Logger and Bayesian Decision Engine
         self.data_logger = SessionDataLogger()
+        self.decision_engine = BayesianDecisionEngine()
+        self.vehicle_vin: Optional[str] = None
+        self.freeze_frame_data: Dict[str, Any] = {}
+        self.last_hypotheses: List[DiagnosticHypothesis] = []
         
         # Initialize engines from config
         try:
@@ -135,6 +140,13 @@ class PMMPController:
                     mode = "MOCK" if self.use_mock else "HARDWARE"
                     logger.info(f"OBD stream started in {mode} mode")
                     self.gui.console_output.append(f"✅ OBD Device initialized ({mode} mode)")
+                    
+                    # Query 17-digit VIN via Mode 09 PID 02
+                    if hasattr(self.obd_mgr, 'query_vin'):
+                        self.vehicle_vin = self.obd_mgr.query_vin()
+                        if self.vehicle_vin:
+                            self.gui.console_output.append(f"🚗 Vehicle VIN Extracted: {self.vehicle_vin}")
+                            logger.info(f"Identified vehicle VIN: {self.vehicle_vin}")
                 else:
                     logger.warning("Hardware not detected. Running in mock mode.")
                     self.gui.console_output.append("⚠️  WARNING: Hardware not detected.")
@@ -199,17 +211,30 @@ class PMMPController:
             self.data_logger.log_telemetry(telemetry)
             
             # STEP 3: DTC polling cycle (every 100 ticks)
+            physics_insights = trim_insights if 'trim_insights' in locals() else []
             if self.diagnostic_cycle_counter >= 100:
                 self.active_dtcs = self.obd_mgr.query_active_dtcs() if self.obd_mgr else []
                 self.diagnostic_cycle_counter = 0
 
-            # STEP 4: Causal root-cause analysis
+                # Capture Mode 02 Freeze-Frame if active DTCs detected and not yet captured
+                if self.active_dtcs and hasattr(self.obd_mgr, 'query_freeze_frame'):
+                    self.freeze_frame_data = self.obd_mgr.query_freeze_frame(self.active_dtcs[0])
+
+            # STEP 4: Causal root-cause analysis & DAG traversal
             dtc_analysis = self._analyze_dtcs(self.active_dtcs) if self.physics_engine else {}
             
-            # STEP 5: RAG service manual contextualization
+            # STEP 5: Bayesian Decision Probability Calculation
+            self.last_hypotheses = self.decision_engine.evaluate(
+                dtc_analysis=dtc_analysis,
+                physics_insights=physics_insights,
+                telemetry=telemetry,
+                freeze_frame=self.freeze_frame_data
+            )
+
+            # STEP 6: RAG service manual contextualization
             rag_data = self._get_rag_data(dtc_analysis) if self.rag_engine else {}
             
-            # STEP 6: Update GUI
+            # STEP 7: Update GUI
             if self.gui:
                 self.gui.update_ui(telemetry, dtc_analysis, rag_data)
             
@@ -296,6 +321,10 @@ class PMMPController:
                 self._read_dtc()
             elif upper_cmd == "LIVE":
                 self._toggle_live_data()
+            elif upper_cmd == "VIN":
+                self._show_vin()
+            elif upper_cmd == "DECISION":
+                self._show_decision_probabilities()
             elif upper_cmd in ("EXIT", "QUIT"):
                 self.app.quit()
             # Advanced Protocol / UDS / Hardware Commands
@@ -359,6 +388,31 @@ class PMMPController:
         except Exception as e:
             self.gui.console_output.append(f"Hardware command execution failed: {e}")
 
+    def _show_vin(self):
+        """Display extracted VIN."""
+        if not self.vehicle_vin and self.obd_mgr and hasattr(self.obd_mgr, 'query_vin'):
+            self.vehicle_vin = self.obd_mgr.query_vin()
+
+        if self.vehicle_vin:
+            self.gui.console_output.append(f"🚗 Extracted Vehicle VIN: {self.vehicle_vin}")
+        else:
+            self.gui.console_output.append("⚠️  VIN not extracted. Ensure ignition is in ON/RUN position.")
+
+    def _show_decision_probabilities(self):
+        """Display Bayesian confidence probabilities for failure modes."""
+        if not self.last_hypotheses:
+            self.gui.console_output.append("ℹ️  Decision Engine: No active anomalies or DTCs evaluated.")
+            return
+
+        self.gui.console_output.append("🧠 Bayesian Decision Probabilities:")
+        for idx, hyp in enumerate(self.last_hypotheses[:3], 1):
+            pct = hyp.probability * 100.0
+            self.gui.console_output.append(f"  {idx}. [{pct:.1f}%] {hyp.hypothesis}")
+            for sig in hyp.supporting_signatures:
+                self.gui.console_output.append(f"     └─ Evidence: {sig}")
+            if hyp.suggested_action:
+                self.gui.console_output.append(f"     └─ Action: {hyp.suggested_action}")
+
     def _show_help(self):
         """Display available commands."""
         help_text = """
@@ -369,6 +423,8 @@ class PMMPController:
 Diagnostic Commands:
   HELP               - Display command reference
   STATUS             - Show system connectivity & pipeline status
+  VIN                - Query 17-digit VIN (Mode 09 PID 02)
+  DECISION           - Show Bayesian root-cause repair probabilities
   LIVE               - Display current telemetry metrics snapshot
   DTC                - Read active DTCs & run causal dependency graph
   CLEAR              - Clear console output window
@@ -428,6 +484,12 @@ Advanced Protocol & UDS:
                     self.gui.console_output.append(f"\n🔗 Suppressed Symptom Codes:")
                     for code in suppressed:
                         self.gui.console_output.append(f"   • {code}")
+
+            if self.last_hypotheses:
+                top = self.last_hypotheses[0]
+                self.gui.console_output.append(
+                    f"\n🧠 Top Probable Cause: {top.hypothesis} ({top.probability*100.0:.1f}% confidence)"
+                )
         except Exception as e:
             logger.error(f"Error reading DTCs: {e}")
             self.gui.console_output.append(f"❌ Error: {e}")
@@ -465,6 +527,7 @@ Advanced Protocol & UDS:
 ╚════════════════════════════════════════════════════════╝
 Environment:  {env}
 Mode:         {mode}
+VIN:          {self.vehicle_vin or 'Not Detected'}
 OBD Status:   {'Streaming' if is_connected else 'Idle/Offline'}
 Active DTCs:  {len(self.active_dtcs)}
 Cycle Count:  {self.diagnostic_cycle_counter}
