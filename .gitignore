@@ -18,3 +18,7 @@ build/
 dist/
 *.egg-info/
 *.index
+session_logs/
+__pycache__/
+.cache/
+*.pyc
