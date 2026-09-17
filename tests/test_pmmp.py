@@ -1,282 +1,551 @@
-"""
-Unit tests for PMMP Pro-G4
-Run all tests: python main.py --test
-"""
-
 import sys
 import os
 import time
-import unittest
-from pathlib import Path
-from types import SimpleNamespace
+import asyncio
+from typing import Optional, Dict, Any, List
 
-# Add parent directory to path
-sys.path.insert(0, str(Path(__file__).parent.parent))
+from PyQt6.QtWidgets import QApplication, QInputDialog, QMessageBox, QLineEdit
+from PyQt6.QtCore import QTimer, QThread, pyqtSignal
 
-from utils.config import Config, get_config, init_config
-from utils.logger import get_logger
+from async_obd_manager import AsyncOBDManager
 from mock_obd_manager import MockOBDManager
 from thermo_diagnostics import ThermodynamicDiagnosticEngine
-from rag_diagnostics_engine import LocalServiceManualRAG
-from pmmp_controller import PMMPController
+from rag_knowledge_engine import LocalServiceManualRAG
+from dtc_loader import DTCLoader
+from nhtsa_client import AsyncNHTSAClient
+from decision_engine import BayesianDecisionEngine, DiagnosticHypothesis
+from gui_dashboard import PMMPProDash
+from data_logger import SessionDataLogger
+from diagnostic_session import DiagnosticSession
+from utils.config import init_config, get_config
+from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+AUTONOMY_LEVELS = {
+    "PASSIVE": 0,
+    "OBSERVE": 1,
+    "RECOMMENDED": 2,
+    "ACTIVE": 3,
+    "FULL": 4,
+}
 
-class TestConfiguration(unittest.TestCase):
-    """Test configuration system"""
-
-    def test_config_loads(self):
-        """Test that config loads without errors"""
-        config = Config(env="development")
-        self.assertIsNotNone(config)
-        self.assertEqual(config.env, "development")
-
-    def test_config_get_simple(self):
-        """Test getting simple config values"""
-        config = Config(env="development")
-        app_name = config.get("app.name")
-        self.assertEqual(app_name, "PMMP Pro-G4 (DEV)")
-
-    def test_config_get_nested(self):
-        """Test getting nested config values"""
-        config = Config(env="development")
-        refresh_rate = config.get("gui.refresh_rate_ms")
-        self.assertEqual(refresh_rate, 50)
-
-    def test_config_get_section(self):
-        """Test getting entire config section"""
-        config = Config(env="development")
-        obd_config = config.get_section("obd")
-        self.assertIn("port", obd_config)
-        self.assertIn("baudrate", obd_config)
+UNSAFE_ACTIONS = {
+    "ATZ": "Clears vehicle fault memory and alters ECU state.",
+    "HEADER": "Sets protocol transmission header and changes low-level bus behavior.",
+    "RAW": "Sends raw vehicle communication frames and may alter ECU state.",
+    "UDS_READ": "Reads manufacturer-specific diagnostic identifiers; may expose sensitive data.",
+    "UDS_CTRL": "Executes bidirectional ECU control and may alter vehicle behavior.",
+    "SCAN": "Sweeps bus addresses and can disturb communication timing.",
+}
 
 
-class TestAutonomyGuardrails(unittest.TestCase):
-    """Test safety gating for dangerous operations."""
+class NHTSAWorker(QThread):
+    results_ready = pyqtSignal(dict, dict)
 
-    def test_passive_mode_blocks_unsafe_actions(self):
-        controller = PMMPController.__new__(PMMPController)
-        controller.autonomy_level = "PASSIVE"
-        controller.gui = SimpleNamespace(console_output=[])
+    def __init__(self, vin: str):
+        super().__init__()
+        self.vin = vin
 
-        self.assertFalse(controller._can_execute_action("ATZ", "clear fault memory"))
-        self.assertFalse(controller._can_execute_action("RAW", "send raw frame"))
+    def run(self):
+        async def fetch():
+            client = AsyncNHTSAClient()
+            recalls = await client.get_recalls(self.vin)
+            tsbs = await client.get_tsbs(self.vin)
+            return recalls, tsbs
 
-    def test_full_mode_allows_unsafe_actions(self):
-        controller = PMMPController.__new__(PMMPController)
-        controller.autonomy_level = "FULL"
-        controller.gui = SimpleNamespace(console_output=[])
-
-        self.assertTrue(controller._can_execute_action("ATZ", "clear fault memory"))
-        self.assertTrue(controller._can_execute_action("RAW", "send raw frame"))
-
-    def test_autonomy_mode_change(self):
-        controller = PMMPController.__new__(PMMPController)
-        controller.autonomy_level = "RECOMMENDED"
-        controller.gui = SimpleNamespace(console_output=[])
-
-        result = controller.set_autonomy_level("ACTIVE")
-        self.assertIn("ACTIVE", result)
-        self.assertEqual(controller.autonomy_level, "ACTIVE")
+        recalls, tsbs = asyncio.run(fetch())
+        self.results_ready.emit(recalls, tsbs)
 
 
-class TestMockOBDManager(unittest.TestCase):
-    """Test mock OBD manager"""
+def authenticate_gatekeeper(shop_password: str = "pmmp", max_attempts: int = 3) -> bool:
+    app = QApplication.instance()
+    owns_app = False
+    if not app:
+        app = QApplication(sys.argv)
+        owns_app = True
 
-    def setUp(self):
-        self.mgr = MockOBDManager()
+    authenticated = False
+    for attempt in range(max_attempts):
+        password, ok = QInputDialog.getText(
+            None,
+            "PMMP Pro-Dash Security",
+            "Enter Workshop Terminal Password:",
+            QLineEdit.EchoMode.Password,
+        )
+        if not ok:
+            return False
 
-    def tearDown(self):
-        if hasattr(self.mgr, "is_running") and self.mgr.is_running:
-            self.mgr.stop_stream()
+        if password == shop_password:
+            authenticated = True
+            break
+        else:
+            remaining = max_attempts - 1 - attempt
+            if remaining > 0:
+                QMessageBox.warning(None, "Access Denied", f"Incorrect password. {remaining} attempts remaining.")
 
-    def test_initialization(self):
-        """Test mock manager initializes"""
-        result = self.mgr.initialize_hardware()
-        self.assertTrue(result)
+    if not authenticated:
+        QMessageBox.critical(None, "Locked Out", "Too many failed attempts. Terminating session.")
 
-    def test_get_telemetry(self):
-        """Test getting telemetry data"""
-        telemetry = self.mgr.get_telemetry()
-        self.assertIn("RPM", telemetry)
-        self.assertIn("LOAD", telemetry)
-        self.assertIn("COOLANT", telemetry)
-        self.assertIn("DTCs", telemetry)
+    if owns_app:
+        app.processEvents()
 
-    def test_start_stop_stream(self):
-        """Test stream start/stop"""
-        self.mgr.initialize_hardware()
-        self.mgr.start_stream()
-        self.assertTrue(self.mgr.is_running)
-
-        time.sleep(0.5)
-        telemetry = self.mgr.get_telemetry()
-        self.assertGreater(telemetry.get("RPM", 0), 0)
-
-        self.mgr.stop_stream()
-        self.assertFalse(self.mgr.is_running)
-
-    def test_dtc_injection(self):
-        """Test DTC injection"""
-        self.mgr.initialize_hardware()
-        self.mgr.start_stream()
-
-        time.sleep(1.0)
-        dtcs = self.mgr.query_active_dtcs()
-        self.assertIsInstance(dtcs, list)
-
-        self.mgr.stop_stream()
-
-    def test_clear_dtcs(self):
-        """Test clearing DTCs"""
-        self.mgr.initialize_hardware()
-        self.mgr._inject_dtc("P0171")
-
-        dtcs = self.mgr.query_active_dtcs()
-        self.assertGreater(len(dtcs), 0)
-
-        self.mgr.clear_dtcs()
-        dtcs = self.mgr.query_active_dtcs()
-        self.assertEqual(len(dtcs), 0)
+    return authenticated
 
 
-class TestPhysicsEngine(unittest.TestCase):
-    """Test thermodynamic diagnostics engine"""
+class PMMPController:
+    def __init__(self, use_mock: bool = False):
+        env = os.getenv("PMMP_ENV", "production")
+        self.config = init_config(env)
+        logger.info(f"PMMP Pro-G4 initialized in {self.config.env} mode")
 
-    def setUp(self):
-        self.engine = ThermodynamicDiagnosticEngine(displacement_liters=2.0)
+        self.app = QApplication.instance() or QApplication(sys.argv)
+        self.gui = PMMPProDash()
+        self.use_mock = use_mock
+        self.autonomy_level = "RECOMMENDED"
+        self.gui.console_input.returnPressed.connect(self.handle_console_command)
 
-    def test_volumetric_efficiency(self):
-        """Test volumetric efficiency calculation"""
-        telemetry = {
-            "MAF": 5.0,
-            "RPM": 2000,
-            "MAP": 80.0,
-            "IAT": 25.0,
-        }
-        ve = self.engine.calculate_volumetric_efficiency(telemetry)
-        self.assertIsInstance(ve, float)
-        self.assertGreaterEqual(ve, 0)
-
-    def test_fuel_trim_analysis(self):
-        """Test fuel trim matrix analysis"""
-        telemetry = {
-            "LTFT": 12.0,
-            "RPM": 750,
-            "LOAD": 10.0,
-        }
-        insights = self.engine.evaluate_fuel_trim_matrix(telemetry)
-        self.assertIsInstance(insights, list)
-
-    def test_dtc_isolation(self):
-        """Test DTC isolation"""
-        active_dtcs = ["P0101", "P0171", "P0300"]
-        analysis = self.engine.isolate_root_dtcs(active_dtcs)
-
-        self.assertIn("root_causes", analysis)
-        self.assertIn("suppressed_symptom_codes", analysis)
-        self.assertIsInstance(analysis["root_causes"], list)
-
-    def test_residuals_detect_lean_bias(self):
-        telemetry = {
-            "RPM": 800,
-            "LOAD": 12.0,
-            "MAF": 3.0,
-            "STFT": 12.0,
-            "LTFT": 11.0,
-            "O2_V": 0.68,
-            "COOLANT": 90,
-        }
-        residuals = self.engine.evaluate_residuals(telemetry)
-        self.assertIn("checks", residuals)
-        self.assertTrue(len(residuals["checks"]) >= 1)
-
-
-class TestRAGEngine(unittest.TestCase):
-    """Test RAG diagnostics engine"""
-
-    def setUp(self):
-        self.rag = LocalServiceManualRAG()
-
-    def test_query_known_code(self):
-        """Test querying known diagnostic code"""
-        result = self.rag.query_diagnostic_procedure("P0101")
-
-        self.assertIn("code", result)
-        self.assertEqual(result["code"], "P0101")
-        self.assertIn("target_component", result)
-        self.assertIn("inspection_steps", result)
-
-    def test_query_unknown_code(self):
-        """Test querying unknown code"""
-        result = self.rag.query_diagnostic_procedure("P9999")
-
-        self.assertIn("code", result)
-        self.assertEqual(result["code"], "P9999")
-        self.assertIn("target_component", result)
-        self.assertEqual(result["target_component"], "Unknown Component")
-
-    def test_pinout_specs(self):
-        """Test pinout specifications available"""
-        result = self.rag.query_diagnostic_procedure("P0101")
-        self.assertIn("pinout_specs", result)
-        self.assertIsInstance(result["pinout_specs"], dict)
-
-
-class TestIntegration(unittest.TestCase):
-    """Integration tests for full system"""
-
-    def test_mock_to_physics_to_rag_pipeline(self):
-        """Test complete data flow: OBD -> Physics -> RAG"""
-
-        obd = MockOBDManager()
-        physics = ThermodynamicDiagnosticEngine()
-        rag = LocalServiceManualRAG()
-
-        self.assertTrue(obd.initialize_hardware())
-        obd.start_stream()
+        self.data_logger = SessionDataLogger()
+        self.decision_engine = BayesianDecisionEngine()
+        self.vehicle_vin: Optional[str] = None
+        self.freeze_frame_data: Dict[str, Any] = {}
+        self.last_hypotheses: List[DiagnosticHypothesis] = []
+        self.current_session = DiagnosticSession(
+            operating_state="unknown",
+            telemetry={},
+            active_dtcs=[],
+            evidence=[],
+            recommended_tests=[],
+            status="OBSERVING",
+        )
 
         try:
-            for _ in range(50):
-                time.sleep(0.3)
-                telemetry = obd.get_telemetry()
-                self.assertIn("RPM", telemetry)
+            obd_config = self.config.get_section("obd")
+            if self.use_mock or env == "development":
+                self.obd_mgr = MockOBDManager()
+                logger.info("Using MOCK OBD Manager for testing")
+            else:
+                self.obd_mgr = AsyncOBDManager(port_name=obd_config.get("port"), fast_init=obd_config.get("fast_init", True))
+            logger.info("OBD Manager initialized")
+        except Exception as e:
+            logger.error(f"Failed to initialize OBD Manager: {e}")
+            self.obd_mgr = None
 
-                dtcs = obd.query_active_dtcs()
-                self.assertIsInstance(dtcs, list)
+        try:
+            engine_config = self.config.get_section("engine")
+            self.physics_engine = ThermodynamicDiagnosticEngine(displacement_liters=engine_config.get("displacement_liters", 2.0))
+            logger.info(f"Physics Engine initialized: {engine_config.get('displacement_liters', 2.0)}L")
+        except Exception as e:
+            logger.error(f"Failed to initialize Physics Engine: {e}")
+            self.physics_engine = None
 
-                if dtcs:
-                    analysis = physics.isolate_root_dtcs(dtcs)
-                    self.assertIn("root_causes", analysis)
+        try:
+            rag_config = self.config.get_section("rag")
+            self.rag_engine = LocalServiceManualRAG(db_path=rag_config.get("manual_db_path", "./service_manuals_index.json"))
+            logger.info("RAG Knowledge Engine initialized")
+        except Exception as e:
+            logger.error(f"Failed to initialize RAG Engine: {e}")
+            self.rag_engine = None
 
-                    if analysis.get("root_causes"):
-                        code = analysis["root_causes"][0]
-                        rag_result = rag.query_diagnostic_procedure(code)
-                        self.assertIn("target_component", rag_result)
-                    break
+        self.timer = QTimer()
+        self.timer.timeout.connect(self.system_tick)
+        self.diagnostic_cycle_counter = 0
+        self.active_dtcs = []
+        self.last_dtc_analysis = {}
+
+    def set_autonomy_level(self, requested_level: str) -> str:
+        normalized = str(requested_level or "RECOMMENDED").upper()
+        if normalized not in AUTONOMY_LEVELS:
+            return f"Unsupported autonomy mode '{requested_level}'. Choose one of: PASSIVE, OBSERVE, RECOMMENDED, ACTIVE, FULL."
+        self.autonomy_level = normalized
+        return f"Autonomy mode set to {self.autonomy_level}."
+
+    def _can_execute_action(self, action_name: str, reason: str = "") -> bool:
+        if action_name not in UNSAFE_ACTIONS:
+            return True
+        current_level = AUTONOMY_LEVELS.get(self.autonomy_level, 0)
+        if current_level < AUTONOMY_LEVELS["FULL"]:
+            message = f"⚠️ Action '{action_name}' blocked in {self.autonomy_level} mode. Reason: {UNSAFE_ACTIONS[action_name]}"
+            if self.gui:
+                self.gui.console_output.append(message)
+            logger.warning(f"Action blocked by autonomy gate: {action_name} ({reason or UNSAFE_ACTIONS[action_name]})")
+            return False
+        return True
+
+    def _describe_autonomy_policy(self) -> str:
+        return (
+            "Autonomy modes:\n"
+            "  PASSIVE   - observe only, no unsafe actions\n"
+            "  OBSERVE   - passive diagnosis only\n"
+            "  RECOMMENDED - automated diagnosis and suggestions, still blocks destructive actions\n"
+            "  ACTIVE    - allow automated read-only testing\n"
+            "  FULL      - allow full control including write commands and ECU resets"
+        )
+
+    def _emit_session_summary(self):
+        summary = self.current_session.summary()
+        self.gui.console_output.append(f"🧠 {summary}")
+
+    def _build_session(self, telemetry: Dict[str, Any], dtc_analysis: Dict[str, Any]) -> DiagnosticSession:
+        operating_state = "unknown"
+        if self.physics_engine:
+            operating_state = self.physics_engine.classify_operating_state(telemetry)
+        return DiagnosticSession.from_hypotheses(
+            telemetry=telemetry,
+            dtc_analysis=dtc_analysis,
+            hypotheses=self.last_hypotheses,
+            operating_state=operating_state,
+        )
+
+    def start(self):
+        try:
+            self.data_logger.start()
+            if self.obd_mgr:
+                if self.obd_mgr.initialize_hardware():
+                    self.obd_mgr.start_stream()
+                    mode = "MOCK" if self.use_mock else "HARDWARE"
+                    logger.info(f"OBD stream started in {mode} mode")
+                    self.gui.console_output.append(f"✅ OBD Device initialized ({mode} mode)")
+                    if hasattr(self.obd_mgr, "query_vin"):
+                        self.vehicle_vin = self.obd_mgr.query_vin()
+                        if self.vehicle_vin:
+                            self.gui.console_output.append(f"🚗 Vehicle VIN Extracted: {self.vehicle_vin}")
+                else:
+                    logger.warning("Hardware not detected. Running in mock mode.")
+                    self.gui.console_output.append("⚠️  WARNING: Hardware not detected.")
+            else:
+                logger.warning("OBD Manager not available.")
+                self.gui.console_output.append("⚠️  WARNING: OBD Manager not initialized.")
+
+            refresh_rate = self.config.get_section("gui").get("refresh_rate_ms", 50)
+            self.gui.show()
+            self.timer.start(refresh_rate)
+            self.gui.console_output.append("✅ System ready. Type 'HELP' for commands.")
+            self.gui.console_output.append(f"🧠 Autonomy mode: {self.autonomy_level}")
+            self.app.exec()
+        except Exception as e:
+            logger.error(f"Error during startup: {e}")
+            if self.gui:
+                self.gui.show_error(f"Startup failed: {e}")
+            raise
         finally:
-            obd.stop_stream()
+            self.data_logger.stop()
+            if self.obd_mgr:
+                self.obd_mgr.stop_stream()
+            logger.info("Application shutting down")
 
+    def system_tick(self):
+        try:
+            self.diagnostic_cycle_counter += 1
+            telemetry = self._get_telemetry()
+            trim_insights = []
+            if self.physics_engine:
+                ve = self.physics_engine.calculate_volumetric_efficiency(telemetry)
+                telemetry["VE"] = round(ve * 100.0, 1)
+                o2_freq, kinetic_alert = self.physics_engine.track_o2_sensor_kinetics(telemetry)
+                telemetry["O2_FREQ_HZ"] = o2_freq
+                ve_alert = self.physics_engine.evaluate_ve_obstruction(telemetry, ve)
+                trim_insights = self.physics_engine.evaluate_fuel_trim_matrix(telemetry)
+                residuals = self.physics_engine.evaluate_residuals(telemetry)
+                if self.diagnostic_cycle_counter % 20 == 0:
+                    for insight in trim_insights:
+                        self.gui.console_output.append(f"🔍 [TRIM MATRIX] {insight}")
+                    if kinetic_alert:
+                        self.gui.console_output.append(f"⚠️  [O2 KINETICS] {kinetic_alert}")
+                    if ve_alert:
+                        self.gui.console_output.append(f"🚨 [VE RESTRICTION] {ve_alert}")
+                    if residuals.get("checks"):
+                        self.gui.console_output.append(f"🧪 [RESIDUALS] {residuals['state']} checks: {len(residuals['checks'])}")
 
-def run_all_tests():
-    """Run all tests and return success status"""
-    loader = unittest.TestLoader()
-    suite = unittest.TestSuite()
+            self.data_logger.log_telemetry(telemetry)
+            if self.diagnostic_cycle_counter >= 100:
+                self.active_dtcs = self.obd_mgr.query_active_dtcs() if self.obd_mgr else []
+                self.diagnostic_cycle_counter = 0
+                if self.active_dtcs and hasattr(self.obd_mgr, "query_freeze_frame"):
+                    self.freeze_frame_data = self.obd_mgr.query_freeze_frame(self.active_dtcs[0])
 
-    suite.addTests(loader.loadTestsFromTestCase(TestConfiguration))
-    suite.addTests(loader.loadTestsFromTestCase(TestAutonomyGuardrails))
-    suite.addTests(loader.loadTestsFromTestCase(TestMockOBDManager))
-    suite.addTests(loader.loadTestsFromTestCase(TestPhysicsEngine))
-    suite.addTests(loader.loadTestsFromTestCase(TestRAGEngine))
-    suite.addTests(loader.loadTestsFromTestCase(TestIntegration))
+            dtc_analysis = self._analyze_dtcs(self.active_dtcs) if self.physics_engine else {}
+            self.last_hypotheses = self.decision_engine.evaluate(
+                dtc_analysis=dtc_analysis,
+                physics_insights=trim_insights,
+                telemetry=telemetry,
+                freeze_frame=self.freeze_frame_data,
+            )
+            self.current_session = self._build_session(telemetry, dtc_analysis)
 
-    runner = unittest.TextTestRunner(verbosity=2)
-    result = runner.run(suite)
-    return result.wasSuccessful()
+            rag_data = self._get_rag_data(dtc_analysis) if self.rag_engine else {}
+            if self.gui:
+                self.gui.update_ui(telemetry, dtc_analysis, rag_data)
+
+            if self.diagnostic_cycle_counter % 25 == 0 and self.last_hypotheses:
+                self._emit_session_summary()
+
+            self.last_dtc_analysis = dtc_analysis
+        except Exception as e:
+            logger.error(f"Error in system tick: {e}")
+
+    def _get_telemetry(self) -> dict:
+        if not self.obd_mgr:
+            return {"RPM": 0, "LOAD": 0.0, "STFT": 0.0, "LTFT": 0.0, "COOLANT": 0, "MAF": 0.0, "MAP": 101.3, "IAT": 25.0, "O2_V": 0.0, "VE": 0.0}
+
+        try:
+            if hasattr(self.obd_mgr, "get_snapshot"):
+                return self.obd_mgr.get_snapshot()
+            elif hasattr(self.obd_mgr, "get_telemetry"):
+                return self.obd_mgr.get_telemetry()
+            return getattr(self.obd_mgr, "telemetry_cache", {}).copy()
+        except Exception as e:
+            logger.debug(f"Error getting telemetry: {e}")
+            return {}
+
+    def _analyze_dtcs(self, active_dtcs: list) -> dict:
+        if not self.physics_engine or not active_dtcs:
+            return {"root_causes": [], "suppressed_symptom_codes": [], "raw_input_codes": []}
+        try:
+            return self.physics_engine.isolate_root_dtcs(active_dtcs)
+        except Exception as e:
+            logger.error(f"Error analyzing DTCs: {e}")
+            return {"root_causes": [], "suppressed_symptom_codes": [], "raw_input_codes": active_dtcs}
+
+    def _get_rag_data(self, dtc_analysis: dict) -> dict:
+        if not self.rag_engine:
+            return {}
+        root_causes = dtc_analysis.get("root_causes", [])
+        if not root_causes:
+            return {}
+        try:
+            return self.rag_engine.query_diagnostic_procedure(root_causes[0])
+        except Exception as e:
+            logger.error(f"Error getting RAG data: {e}")
+            return {}
+
+    def handle_console_command(self):
+        try:
+            cmd = self.gui.console_input.text().strip()
+            self.gui.console_input.clear()
+            if not cmd:
+                return
+            self.gui.console_output.append(f">> {cmd}")
+            parts = cmd.split()
+            upper_cmd = parts[0].upper()
+
+            if upper_cmd in ("MODE", "AUTO", "AUTONOMY"):
+                if len(parts) < 2:
+                    self.gui.console_output.append(self._describe_autonomy_policy())
+                else:
+                    self.gui.console_output.append(self.set_autonomy_level(parts[1]))
+                return
+
+            if upper_cmd == "SAFE":
+                self.gui.console_output.append(self._describe_autonomy_policy())
+                return
+
+            if upper_cmd == "HELP":
+                self._show_help()
+            elif upper_cmd == "CLEAR":
+                self.gui.console_output.clear()
+            elif upper_cmd == "STATUS":
+                self._show_status()
+            elif upper_cmd == "ATZ":
+                if not self._can_execute_action("ATZ", "reset device and clear DTCs"):
+                    return
+                self._reset_device()
+            elif upper_cmd == "DTC":
+                self._read_dtc()
+            elif upper_cmd == "LIVE":
+                self._toggle_live_data()
+            elif upper_cmd == "VIN":
+                self._show_vin()
+            elif upper_cmd == "DECISION":
+                self._show_decision_probabilities()
+            elif upper_cmd == "SESSION":
+                self._emit_session_summary()
+            elif upper_cmd in ("EXIT", "QUIT"):
+                self.app.quit()
+            elif upper_cmd in ("HEADER", "RAW", "UDS_READ", "UDS_CTRL", "SCAN"):
+                if not self._can_execute_action(upper_cmd, "low-level protocol operation"):
+                    return
+                self._handle_hardware_protocol_command(upper_cmd, parts, cmd)
+            else:
+                self.gui.console_output.append(f"❌ Unknown command: {cmd}. Type HELP for available commands.")
+        except Exception as e:
+            logger.error(f"Error handling console command: {e}")
+            self.gui.console_output.append(f"❌ Error: {e}")
+
+    def _handle_hardware_protocol_command(self, upper_cmd: str, parts: list, full_cmd: str):
+        if not self.obd_mgr or not hasattr(self.obd_mgr, "connection") or not self.obd_mgr.connection or not self.obd_mgr.connection.interface:
+            self.gui.console_output.append("❌ Error: Hardware interface not active. Run connected to physical OBD device.")
+            return
+
+        interface = self.obd_mgr.connection.interface
+        try:
+            if upper_cmd == "HEADER" and len(parts) > 1:
+                resp = interface.send(f"AT SH {parts[1]}")
+                self.gui.console_output.append(f"CAN Header set to {parts[1]}: {resp}")
+            elif upper_cmd == "RAW":
+                resp = interface.send(" ".join(parts[1:]))
+                self.gui.console_output.append(f"Response: {resp}")
+            elif upper_cmd == "UDS_READ" and len(parts) > 1:
+                resp = interface.send(f"22 {parts[1]}")
+                self.gui.console_output.append(f"UDS Read [{parts[1]}] -> {resp}")
+            elif upper_cmd == "UDS_CTRL" and len(parts) > 2:
+                resp = interface.send(f"2F {parts[1]} {parts[2]}")
+                self.gui.console_output.append(f"UDS Control [{parts[1]}] param {parts[2]} -> {resp}")
+            elif upper_cmd == "SCAN":
+                self.gui.console_output.append("Scanning standard module CAN IDs...")
+                active_nodes = []
+                for node_id in [0x7E0, 0x7E1, 0x7E2, 0x726, 0x730, 0x740, 0x750, 0x760]:
+                    id_hex = f"{node_id:03X}"
+                    interface.send(f"AT SH {id_hex}")
+                    resp = interface.send("3E 00")
+                    if resp and "NO DATA" not in str(resp) and "Error" not in str(resp) and "?" not in str(resp):
+                        active_nodes.append(id_hex)
+                        self.gui.console_output.append(f"  [+] Active Node Found: 0x{id_hex} -> {resp}")
+                self.gui.console_output.append(f"Scan complete. Found {len(active_nodes)} responding modules.")
+            else:
+                resp = interface.send(full_cmd)
+                self.gui.console_output.append(str(resp))
+        except Exception as e:
+            self.gui.console_output.append(f"Hardware command execution failed: {e}")
+
+    def _show_vin(self):
+        if not self.vehicle_vin and self.obd_mgr and hasattr(self.obd_mgr, "query_vin"):
+            self.vehicle_vin = self.obd_mgr.query_vin()
+        if self.vehicle_vin:
+            self.gui.console_output.append(f"🚗 Extracted Vehicle VIN: {self.vehicle_vin}")
+        else:
+            self.gui.console_output.append("⚠️  VIN not extracted. Ensure ignition is in ON/RUN position.")
+
+    def _show_decision_probabilities(self):
+        if not self.last_hypotheses:
+            self.gui.console_output.append("ℹ️  Decision Engine: No active anomalies or DTCs evaluated.")
+            return
+        self.gui.console_output.append("🧠 Bayesian Decision Probabilities:")
+        for idx, hyp in enumerate(self.last_hypotheses[:3], 1):
+            pct = hyp.probability * 100.0
+            self.gui.console_output.append(f"  {idx}. [{pct:.1f}%] {hyp.hypothesis}")
+            if hyp.supporting_signatures:
+                self.gui.console_output.append(f"     └─ Evidence: {hyp.supporting_signatures[0]}")
+            if hyp.next_best_tests:
+                self.gui.console_output.append(f"     └─ Best Next Test: {hyp.next_best_tests[0]}")
+            if hyp.suggested_action:
+                self.gui.console_output.append(f"     └─ Action: {hyp.suggested_action}")
+
+    def _show_help(self):
+        help_text = """
+╔════════════════════════════════════════════════════════╗
+║           PMMP Pro-G4 Workstation Terminal            ║
+╚════════════════════════════════════════════════════════╝
+
+Autonomy & Safety:
+  MODE <PASSIVE|OBSERVE|RECOMMENDED|ACTIVE|FULL>
+  SAFE               - Display autonomy policy
+  SESSION            - Display current diagnostic session summary
+
+Diagnostic Commands:
+  HELP               - Display command reference
+  STATUS             - Show system connectivity & pipeline status
+  VIN                - Query 17-digit VIN
+  DECISION           - Show Bayesian root-cause repair probabilities
+  LIVE               - Display current telemetry metrics snapshot
+  DTC                - Read active DTCs & run causal dependency graph
+  CLEAR              - Clear console output window
+  EXIT/QUIT          - Terminate session
+
+Advanced Protocol & UDS:
+  HEADER <can_id>    - Set CAN transmit header (requires FULL)
+  RAW <hex>          - Transmit raw hex payload (requires FULL)
+  SCAN               - Sweep ECU addresses (requires FULL)
+  UDS_READ <did>     - Read Data By Identifier (requires FULL)
+  UDS_CTRL <did> <v> - Input/Output Control (requires FULL)
+"""
+        self.gui.console_output.append(help_text)
+
+    def _reset_device(self):
+        try:
+            if self.obd_mgr:
+                self.gui.console_output.append("🔄 Resetting device and clearing DTCs...")
+                if hasattr(self.obd_mgr, "clear_dtcs"):
+                    self.obd_mgr.clear_dtcs()
+                    self.gui.console_output.append("✅ DTCs cleared successfully")
+                else:
+                    self.gui.console_output.append("✅ Device reset command sent")
+            else:
+                self.gui.console_output.append("❌ OBD Manager not available")
+        except Exception as e:
+            logger.error(f"Error resetting device: {e}")
+            self.gui.console_output.append(f"❌ Reset failed: {e}")
+
+    def _read_dtc(self):
+        try:
+            if not self.obd_mgr:
+                self.gui.console_output.append("❌ OBD Manager not available")
+                return
+            active_dtcs = self.obd_mgr.query_active_dtcs()
+            if not active_dtcs:
+                self.gui.console_output.append("✅ No active DTCs detected")
+                return
+            self.gui.console_output.append(f"📋 Active DTCs ({len(active_dtcs)}):")
+            for code in active_dtcs:
+                self.gui.console_output.append(f"   • {code}")
+            if self.last_dtc_analysis:
+                roots = self.last_dtc_analysis.get("root_causes", [])
+                suppressed = self.last_dtc_analysis.get("suppressed_symptom_codes", [])
+                if roots:
+                    self.gui.console_output.append("\n🔍 Primary Root Causes:")
+                    for code in roots:
+                        self.gui.console_output.append(f"   • {code}")
+                if suppressed:
+                    self.gui.console_output.append("\n🔗 Suppressed Symptom Codes:")
+                    for code in suppressed:
+                        self.gui.console_output.append(f"   • {code}")
+            if self.last_hypotheses:
+                top = self.last_hypotheses[0]
+                self.gui.console_output.append(f"\n🧠 Top Probable Cause: {top.hypothesis} ({top.probability * 100.0:.1f}% confidence)")
+        except Exception as e:
+            logger.error(f"Error reading DTCs: {e}")
+            self.gui.console_output.append(f"❌ Error: {e}")
+
+    def _toggle_live_data(self):
+        try:
+            self.gui.console_output.append("📡 Live Telemetry Snapshot:")
+            telemetry = self._get_telemetry()
+            if telemetry:
+                self.gui.console_output.append(f"   RPM:     {telemetry.get('RPM', 0):.0f} RPM")
+                self.gui.console_output.append(f"   LOAD:    {telemetry.get('LOAD', 0):.1f} %")
+                self.gui.console_output.append(f"   MAF:     {telemetry.get('MAF', 0):.1f} g/s")
+                self.gui.console_output.append(f"   VE:      {telemetry.get('VE', 0.0):.1f} %")
+                self.gui.console_output.append(f"   STFT:    {telemetry.get('STFT', 0):.1f} %")
+                self.gui.console_output.append(f"   LTFT:    {telemetry.get('LTFT', 0):.1f} %")
+                self.gui.console_output.append(f"   COOLANT: {telemetry.get('COOLANT', 0):.0f} °C")
+                self.gui.console_output.append(f"   O2_V:    {telemetry.get('O2_V', 0):.2f} V ({telemetry.get('O2_FREQ_HZ', 0.0):.2f} Hz)")
+            else:
+                self.gui.console_output.append("   (No telemetry available)")
+        except Exception as e:
+            logger.error(f"Error displaying live data: {e}")
+            self.gui.console_output.append(f"❌ Error: {e}")
+
+    def _show_status(self):
+        try:
+            status_text = f"""
+╔════════════════════════════════════════════════════════╗
+║              PMMP Pro-G4 System Status                 ║
+╚════════════════════════════════════════════════════════╝
+Environment:  {self.config.env.upper()}
+Mode:         {'MOCK' if self.use_mock else 'HARDWARE'}
+Autonomy:     {self.autonomy_level}
+VIN:          {self.vehicle_vin or 'Not Detected'}
+OBD Status:   {'Streaming' if self.obd_mgr and getattr(self.obd_mgr, 'is_running', False) else 'Idle/Offline'}
+Active DTCs:  {len(self.active_dtcs)}
+Cycle Count:  {self.diagnostic_cycle_counter}
+"""
+            self.gui.console_output.append(status_text)
+        except Exception as e:
+            logger.error(f"Error showing status: {e}")
+            self.gui.console_output.append(f"❌ Error: {e}")
 
 
 if __name__ == "__main__":
-    success = run_all_tests()
-    sys.exit(0 if success else 1)
+    controller = PMMPController(use_mock=True)
+    controller.start()
 

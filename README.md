@@ -1,254 +1,249 @@
-# PMMP Pro-G4 - Vehicle Diagnostics System
-
-**LOOSE NUTZ GARAGE // PMMP PRO-DASH v3.0-PHYSICS**
-
-A professional vehicle diagnostic system using Retrieval-Augmented Generation (RAG), on-board diagnostics (OBD-II), and thermodynamic physics analysis.
-
-## Features
-
-- 🚗 **Real-time OBD-II Data Streaming** - Connect to vehicle diagnostic port
-- 🧠 **RAG-Powered Knowledge Base** - Service manual lookup for diagnostic codes
-- 🔬 **Physics Engine** - Thermodynamic diagnostics analysis
-- 📊 **Professional GUI Dashboard** - PyQt6-based interface with live telemetry
-- 🔧 **Console/REPL Interface** - Command-line interface for advanced operations
-- ⚙️ **Configuration System** - Environment-based config (dev, production)
-- 📝 **Comprehensive Logging** - Full logging with rotation for production
-
-## Quick Start
-
-### 1. Install Dependencies
-
-```bash
-pip install -r requirements.txt
-```
-
-### 2. Choose Your Environment
-
-Set the environment (default is production):
-
-```bash
-export PMMP_ENV=development  # or 'production'
-python main.py
-```
-
-### 3. Run the Application
-
-```bash
-python main.py
-```
-
-The GUI will start with the dashboard. Use the console at the bottom for commands.
-
-## Configuration
-
-Configuration is managed through JSON files in the `config/` directory:
-
-- `config/default.json` - Base configuration (production defaults)
-- `config/development.json` - Development overrides
-- Environment variables prefixed with `PMMP_` override config files
-
-### Configuration Structure
-
-```json
-{
-  "app": { "name": "PMMP Pro-G4", "version": "1.0.0", "mode": "production" },
-  "obd": { "port": "/dev/...", "fast_init": true, "baudrate": 115200, "timeout": 10 },
-  "engine": { "displacement_liters": 2.0, "fuel_type": "gasoline" },
-  "gui": { "window_width": 1200, "window_height": 800, "theme": "dark", "refresh_rate_ms": 50 },
-  "rag": { "manual_db_path": "./service_manuals", "use_remote": false },
-  "logging": { "level": "INFO", "log_file": "./logs/pmmp.log", "max_log_size_mb": 10 },
-  "diagnostics": { "enable_physics_analysis": true, "enable_rag_lookup": true }
-}
-```
-
-### Environment Variables
-
-Override config values using `PMMP_SECTION_KEY` format:
-
-```bash
-export PMMP_OBD_PORT="/dev/ttyUSB0"
-export PMMP_LOGGING_LEVEL="DEBUG"
-export PMMP_OBD_FAST_INIT="false"
-python main.py
-```
-
-## Console Commands
-
-Available commands in the GUI console:
-
-| Command | Description |
-|---------|-------------|
-| `HELP` | Show available commands |
-| `ATZ` | Reset OBD device |
-| `DTC` | Read diagnostic trouble codes |
-| `LIVE` | Toggle live data streaming |
-| `EXIT` / `QUIT` | Exit application |
-
-## Project Structure
-
-```
-pmmp_pro-g4/
-├── config/                      # Configuration files
-│   ├── default.json            # Production config
-│   └── development.json        # Development overrides
-├── utils/                       # Utility modules
-│   ├── config.py               # Configuration loader
-│   └── logger.py               # Logging setup
-├── pmmp_controller.py          # Main controller
-├── async_obd_manager.py        # OBD hardware manager
-├── thermo_diagnostics.py       # Physics engine
-├── rag_diagnostics_engine.py   # Knowledge base
-├── gui_dashboard.py            # PyQt6 UI
-├── rag_knowledge_engine.py     # RAG implementation
-├── main.py                     # Entry point
-├── requirements.txt            # Dependencies
-├── setup.py                    # Installation script
-└── PRODUCTION_ROADMAP.md       # Detailed roadmap
-```
-
-## Development
-
-### Running in Development Mode
-
-```bash
-export PMMP_ENV=development
-python main.py
-```
-
-Development mode:
-- Enables DEBUG logging
-- Uses mock OBD device
-- Disables result caching
-
-### Logging
-
-Logs are written to `./logs/pmmp.log` with automatic rotation.
-
-Monitor logs in real-time:
-
-```bash
-tail -f logs/pmmp.log
-```
-
-## Hardware Setup
-
-### Required Hardware
-
-- **OBD-II Adapter**: ScanTool.net LLC OBDLink EX or compatible
-- **Vehicle**: 2008+ with OBD-II port
-
-### Serial Port Configuration
-
-Update the serial port in `config/production.json`:
-
-```bash
-# Linux/Mac
-ls /dev/tty.* /dev/cu.*
-
-# Windows
-# COM ports in Device Manager
-```
-
-## Troubleshooting
-
-### Hardware Not Detected
-
-The system falls back to **mock mode** if hardware fails:
-
-```
-⚠️  WARNING: Hardware not detected. Running in mock mode.
-```
-
-This allows testing without a vehicle connected.
-
-### Configuration Issues
-
-Check logs for configuration errors:
-
-```bash
-tail -f logs/pmmp.log | grep -i config
-```
-
-### Import Errors
-
-Ensure all dependencies are installed:
-
-```bash
-pip install -r requirements.txt --upgrade
-```
-
-## Production Deployment
-
-### Installation
-
-```bash
-pip install -e .
-pmmp-pro-g4  # Runs the application
-```
-
-### Docker Support (Coming Soon)
-
-```bash
-docker build -t pmmp-pro-g4 .
-docker run -p 5000:5000 pmmp-pro-g4
-```
-
-### Performance Considerations
-
-- **GUI Refresh Rate**: Set `gui.refresh_rate_ms` in config (default 50ms = 20 Hz)
-- **Logging Level**: Set to `WARNING` or `ERROR` in production
-- **Cache**: Enable `diagnostics.cache_results` for faster lookups
-
-## API Reference
-
-### PMMPController
-
-```python
-from pmmp_controller import PMMPController
-
-controller = PMMPController()
-controller.start()  # Starts the application
-```
-
-### Accessing Config
-
-```python
-from utils.config import get_config
-
-config = get_config()
-obd_port = config.get('obd.port')
-all_settings = config.to_dict()
-```
-
-### Accessing Logger
-
-```python
+"""
+Unit tests for PMMP Pro-G4
+Run all tests: python main.py --test
+"""
+
+import sys
+import os
+import time
+import unittest
+from pathlib import Path
+from types import SimpleNamespace
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from utils.config import Config, get_config, init_config
 from utils.logger import get_logger
+from mock_obd_manager import MockOBDManager
+from thermo_diagnostics import ThermodynamicDiagnosticEngine
+from rag_diagnostics_engine import LocalServiceManualRAG
+from pmmp_controller import PMMPController
+from diagnostic_session import DiagnosticSession
 
 logger = get_logger(__name__)
-logger.info("Application started")
-logger.error("Error occurred", exc_info=True)
-```
 
-## Contributing
 
-When adding new features:
+class TestConfiguration(unittest.TestCase):
+    def test_config_loads(self):
+        config = Config(env="development")
+        self.assertIsNotNone(config)
+        self.assertEqual(config.env, "development")
 
-1. Add configuration to `config/default.json`
-2. Add logging throughout the code
-3. Use the config system for all settings
-4. Update this README
+    def test_config_get_simple(self):
+        config = Config(env="development")
+        app_name = config.get("app.name")
+        self.assertEqual(app_name, "PMMP Pro-G4 (DEV)")
 
-## License
+    def test_config_get_nested(self):
+        config = Config(env="development")
+        refresh_rate = config.get("gui.refresh_rate_ms")
+        self.assertEqual(refresh_rate, 50)
 
-Proprietary - Loose Nutz Garage
+    def test_config_get_section(self):
+        config = Config(env="development")
+        obd_config = config.get_section("obd")
+        self.assertIn("port", obd_config)
+        self.assertIn("baudrate", obd_config)
 
-## Support
 
-For issues and feature requests, check the [PRODUCTION_ROADMAP.md](PRODUCTION_ROADMAP.md).
+class TestAutonomyGuardrails(unittest.TestCase):
+    def test_passive_mode_blocks_unsafe_actions(self):
+        controller = PMMPController.__new__(PMMPController)
+        controller.autonomy_level = "PASSIVE"
+        controller.gui = SimpleNamespace(console_output=[])
+        self.assertFalse(controller._can_execute_action("ATZ", "clear fault memory"))
+        self.assertFalse(controller._can_execute_action("RAW", "send raw frame"))
 
----
+    def test_full_mode_allows_unsafe_actions(self):
+        controller = PMMPController.__new__(PMMPController)
+        controller.autonomy_level = "FULL"
+        controller.gui = SimpleNamespace(console_output=[])
+        self.assertTrue(controller._can_execute_action("ATZ", "clear fault memory"))
+        self.assertTrue(controller._can_execute_action("RAW", "send raw frame"))
 
-**Last Updated**: 2024-08-13  
-**Version**: 1.0.0  
-**Status**: Beta (Production Ready)
+    def test_autonomy_mode_change(self):
+        controller = PMMPController.__new__(PMMPController)
+        controller.autonomy_level = "RECOMMENDED"
+        controller.gui = SimpleNamespace(console_output=[])
+        result = controller.set_autonomy_level("ACTIVE")
+        self.assertIn("ACTIVE", result)
+        self.assertEqual(controller.autonomy_level, "ACTIVE")
+
+
+class TestDiagnosticSession(unittest.TestCase):
+    def test_diagnostic_session_summary(self):
+        session = DiagnosticSession(
+            operating_state="idle",
+            telemetry={"RPM": 800, "LOAD": 15.0},
+            active_dtcs=["P0171"],
+            evidence=[],
+            recommended_tests=[],
+            status="OBSERVING",
+        )
+        self.assertIn("Diagnostic session", session.summary())
+
+    def test_diagnostic_session_from_hypotheses(self):
+        class FakeHypothesis:
+            def __init__(self):
+                self.hypothesis = "Intake Manifold / Vacuum Leak"
+                self.probability = 0.62
+                self.supporting_signatures = ["DTC P0171 present"]
+                self.contradicting_signatures = []
+                self.next_best_tests = ["smoke_test_intake"]
+                self.suggested_action = "Perform smoke test"
+                self.explanation = "Lean condition at idle"
+
+        session = DiagnosticSession.from_hypotheses(
+            telemetry={"RPM": 800, "LOAD": 15.0},
+            dtc_analysis={"root_causes": ["P0171"], "raw_input_codes": ["P0171"]},
+            hypotheses=[FakeHypothesis()],
+            operating_state="idle",
+        )
+        self.assertEqual(session.status, "READY")
+        self.assertIn("smoke_test_intake", session.recommended_tests)
+
+
+class TestMockOBDManager(unittest.TestCase):
+    def setUp(self):
+        self.mgr = MockOBDManager()
+
+    def tearDown(self):
+        if hasattr(self.mgr, "is_running") and self.mgr.is_running:
+            self.mgr.stop_stream()
+
+    def test_initialization(self):
+        result = self.mgr.initialize_hardware()
+        self.assertTrue(result)
+
+    def test_get_telemetry(self):
+        telemetry = self.mgr.get_telemetry()
+        self.assertIn("RPM", telemetry)
+        self.assertIn("LOAD", telemetry)
+        self.assertIn("COOLANT", telemetry)
+        self.assertIn("DTCs", telemetry)
+
+    def test_start_stop_stream(self):
+        self.mgr.initialize_hardware()
+        self.mgr.start_stream()
+        self.assertTrue(self.mgr.is_running)
+        time.sleep(0.5)
+        telemetry = self.mgr.get_telemetry()
+        self.assertGreater(telemetry.get("RPM", 0), 0)
+        self.mgr.stop_stream()
+        self.assertFalse(self.mgr.is_running)
+
+    def test_dtc_injection(self):
+        self.mgr.initialize_hardware()
+        self.mgr.start_stream()
+        time.sleep(1.0)
+        dtcs = self.mgr.query_active_dtcs()
+        self.assertIsInstance(dtcs, list)
+        self.mgr.stop_stream()
+
+    def test_clear_dtcs(self):
+        self.mgr.initialize_hardware()
+        self.mgr._inject_dtc("P0171")
+        dtcs = self.mgr.query_active_dtcs()
+        self.assertGreater(len(dtcs), 0)
+        self.mgr.clear_dtcs()
+        dtcs = self.mgr.query_active_dtcs()
+        self.assertEqual(len(dtcs), 0)
+
+
+class TestPhysicsEngine(unittest.TestCase):
+    def setUp(self):
+        self.engine = ThermodynamicDiagnosticEngine(displacement_liters=2.0)
+
+    def test_volumetric_efficiency(self):
+        telemetry = {"MAF": 5.0, "RPM": 2000, "MAP": 80.0, "IAT": 25.0}
+        ve = self.engine.calculate_volumetric_efficiency(telemetry)
+        self.assertIsInstance(ve, float)
+        self.assertGreaterEqual(ve, 0)
+
+    def test_fuel_trim_analysis(self):
+        telemetry = {"LTFT": 12.0, "RPM": 750, "LOAD": 10.0}
+        insights = self.engine.evaluate_fuel_trim_matrix(telemetry)
+        self.assertIsInstance(insights, list)
+
+    def test_dtc_isolation(self):
+        active_dtcs = ["P0101", "P0171", "P0300"]
+        analysis = self.engine.isolate_root_dtcs(active_dtcs)
+        self.assertIn("root_causes", analysis)
+        self.assertIn("suppressed_symptom_codes", analysis)
+        self.assertIsInstance(analysis["root_causes"], list)
+
+    def test_residuals_detect_lean_bias(self):
+        telemetry = {"RPM": 800, "LOAD": 12.0, "MAF": 3.0, "STFT": 12.0, "LTFT": 11.0, "O2_V": 0.68, "COOLANT": 90}
+        residuals = self.engine.evaluate_residuals(telemetry)
+        self.assertIn("checks", residuals)
+        self.assertTrue(len(residuals["checks"]) >= 1)
+
+
+class TestRAGEngine(unittest.TestCase):
+    def setUp(self):
+        self.rag = LocalServiceManualRAG()
+
+    def test_query_known_code(self):
+        result = self.rag.query_diagnostic_procedure("P0101")
+        self.assertIn("code", result)
+        self.assertEqual(result["code"], "P0101")
+        self.assertIn("target_component", result)
+        self.assertIn("inspection_steps", result)
+
+    def test_query_unknown_code(self):
+        result = self.rag.query_diagnostic_procedure("P9999")
+        self.assertIn("code", result)
+        self.assertEqual(result["code"], "P9999")
+        self.assertIn("target_component", result)
+        self.assertEqual(result["target_component"], "Unknown Component")
+
+    def test_pinout_specs(self):
+        result = self.rag.query_diagnostic_procedure("P0101")
+        self.assertIn("pinout_specs", result)
+        self.assertIsInstance(result["pinout_specs"], dict)
+
+
+class TestIntegration(unittest.TestCase):
+    def test_mock_to_physics_to_rag_pipeline(self):
+        obd = MockOBDManager()
+        physics = ThermodynamicDiagnosticEngine()
+        rag = LocalServiceManualRAG()
+        self.assertTrue(obd.initialize_hardware())
+        obd.start_stream()
+        try:
+            for _ in range(50):
+                time.sleep(0.3)
+                telemetry = obd.get_telemetry()
+                self.assertIn("RPM", telemetry)
+                dtcs = obd.query_active_dtcs()
+                self.assertIsInstance(dtcs, list)
+                if dtcs:
+                    analysis = physics.isolate_root_dtcs(dtcs)
+                    self.assertIn("root_causes", analysis)
+                    if analysis.get("root_causes"):
+                        code = analysis["root_causes"][0]
+                        rag_result = rag.query_diagnostic_procedure(code)
+                        self.assertIn("target_component", rag_result)
+                    break
+        finally:
+            obd.stop_stream()
+
+
+def run_all_tests():
+    loader = unittest.TestLoader()
+    suite = unittest.TestSuite()
+    suite.addTests(loader.loadTestsFromTestCase(TestConfiguration))
+    suite.addTests(loader.loadTestsFromTestCase(TestAutonomyGuardrails))
+    suite.addTests(loader.loadTestsFromTestCase(TestDiagnosticSession))
+    suite.addTests(loader.loadTestsFromTestCase(TestMockOBDManager))
+    suite.addTests(loader.loadTestsFromTestCase(TestPhysicsEngine))
+    suite.addTests(loader.loadTestsFromTestCase(TestRAGEngine))
+    suite.addTests(loader.loadTestsFromTestCase(TestIntegration))
+    result = unittest.TextTestRunner(verbosity=2).run(suite)
+    return result.wasSuccessful()
+
+
+if __name__ == "__main__":
+    success = run_all_tests()
+    sys.exit(0 if success else 1)
+
